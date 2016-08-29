@@ -1,13 +1,16 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 #define MAX_VERTICES    201
 
+#define MAX_CUT_TESTS   100000
+
 typedef struct _vertex {
     int  id;
     int  degree;
-    char neighbours[MAX_VERTICES];
+    int  neighbours[MAX_VERTICES];
 } Vertex;
 
 static Vertex *read_vertices(FILE *f)
@@ -48,39 +51,32 @@ static Vertex *read_vertices(FILE *f)
     return G;
 }
 
-static void print_graph(Vertex *G) {
+static void print_vertex(Vertex *G, Vertex *V)
+{
+    printf("\t Node %i (%i degrees):", V->id, V->degree);
     for (int i = 1; i < MAX_VERTICES; i++) {
-        printf("\t Node %i (%i degrees):", G[i].id, G[i].degree);
-        for (int j = 1; j < MAX_VERTICES; j++) {
-            // if (G[i].neighbours[j])
-                printf("\t%i: %i", G[j].id, G[i].neighbours[j]);
-        }
-        printf("\n");
+        // if (G[i].neighbours[j])
+            printf("\t%i: %i", G[i].id, V->neighbours[i]);
+    }
+    printf("\n");
+}
+
+static void print_graph(Vertex *G)
+{
+    for (int i = 1; i < MAX_VERTICES; i++) {
+        print_vertex(G, &G[i]);
     }
 }
 
-int main(int argc, char *argv[])
+static int min_cut(Vertex *G)
 {
-    Vertex *G = read_vertices(stdin);
     int v = MAX_VERTICES - 1;
-    time_t t;
-
-    // seed rand
-    srand((unsigned) time(&t));
-
-    printf("===\nInput:\n===\n");
-    //print_graph(G);
 
     // fold!
     while (v > 2) {
-        printf("v: %i\n", v);
-
         // pick random vertex
         Vertex *U = NULL;
         int r_U = rand() % v + 1;
-
-        printf("Selecting vertex %i of %i\n", r_U, v);
-
         for (int i = 1; i < MAX_VERTICES; i++){
             if (0 < G[i].degree)
                 r_U--;
@@ -97,13 +93,9 @@ int main(int argc, char *argv[])
             if (U->neighbours[i])
                 n_V++;
 
-
         // pick a random edge
         Vertex *V = NULL;
         int r_V = rand() % n_V + 1;
-
-        printf("Selecting edge %i of %i on vertex (%i)\n", r_V, n_V, U->id);
-
         for (int i = 1; i < MAX_VERTICES; i++){
             if (i != U->id) {
                 if (0 < U->neighbours[i])
@@ -116,8 +108,17 @@ int main(int argc, char *argv[])
             }
         }
 
+        // check edge is not a loop
+        if (U->id == V->id) {
+            fprintf(stderr, "Edge %i, %i is a loop\n", U->id, V->id);
+            exit(1);
+        }
 
-        printf("Selected nodes %i and %i\n", U->id, V->id);
+        // check edge is balanced
+        if (U->neighbours[V->id] != V->neighbours[U->id]) {
+            fprintf(stderr, "Edge %i, %i is unbalanced: %i, %i\n", U->id, V->id, U->neighbours[V->id], V->neighbours[U->id]);
+            exit(1);
+        }
 
         // delete selected edge and parallels that cause self-loops
         U->degree -= U->neighbours[V->id];
@@ -126,36 +127,79 @@ int main(int argc, char *argv[])
         V->degree -= V->neighbours[U->id];
         V->neighbours[U->id] = 0;
 
-        printf("===\nDeleted edge %i, %i:\n===\n", U->id, V->id);
-        //print_graph(G);
+        // check edge is still balanced
+        if (U->neighbours[V->id] != V->neighbours[U->id]) {
+            fprintf(stderr, "Edge %i, %i is unbalanced after deletion: %i, %i\n", U->id, V->id, U->neighbours[V->id], V->neighbours[U->id]);
+            exit(1);
+        }
 
-
-        // copy edges from U to V
+        // move edges from U to V
         for (int i = 1; i < MAX_VERTICES; i++) {
-            if (0 < U->neighbours[i]) {
-                // link V to edges from U
-                if (i != U->id) {
-                    V->neighbours[i] += U->neighbours[i];
-                    V->degree += U->neighbours[i];
+            if (0 < U->neighbours[i] && i != U->id && i != V->id) {
+                // check edge is balanced
+                if (U->neighbours[i] != G[i].neighbours[U->id]) {
+                    fprintf(stderr, "Edge %i, %i is unbalanced: %i, %i\n", U->id, i, U->neighbours[i], G[i].neighbours[U->id]);
+                    exit(1);
                 }
 
-                // link edges from U to V
+                // add edges to V
+                V->neighbours[i] += U->neighbours[i];
+                V->degree += U->neighbours[i];
+
+                // update the adjacent vertices
                 G[i].neighbours[V->id] += G[i].neighbours[U->id];
                 G[i].neighbours[U->id] = 0;
 
+                // remove edges from U
                 U->degree -= U->neighbours[i];
                 U->neighbours[i] = 0;
             }
         }
 
-        printf("===\nMoved edges from %i to %i:\n===\n", U->id, V->id);
-        //print_graph(G);
+        // validate V and U
+        if (U->degree != 0) {
+            fprintf(stderr, "Collapsed vertex %i in (%i, %i) has %i degrees\n", U->id, U->id, V->id, U->degree);
+            print_vertex(G, U);
+            exit(1);
+        }
 
         v--;
     }
 
-    printf("===\nMin cut:\n===\n");
-    print_graph(G);
+    // count edges on minimum cut
+    for (int i = 1; i < MAX_VERTICES; i++)
+        if (G[i].degree)
+            return G[i].degree;
+
+    return -1;
+}
+
+int main(int argc, char *argv[])
+{
+    time_t t;
+
+    // seed rand
+    srand((unsigned) time(&t));
+
+    // read graph
+    Vertex *G = read_vertices(stdin);
+
+    // test MAX_CUT_TESTS times
+    int min = 0xFFFF;
+    int test = 0;
+    for (int i = 0; i < MAX_CUT_TESTS; i++) {
+        // copy graph
+        Vertex *G2 = calloc(MAX_VERTICES, sizeof(Vertex));
+        memcpy(G2, G, sizeof(Vertex) * MAX_VERTICES);
+
+        // get min cut
+        if (min > (test = min_cut(G2)))
+            min = test;
+
+        free(G2);
+    }
+    
+    printf("Minimum cut edges: %i\n", min);
 
     free(G);
 
